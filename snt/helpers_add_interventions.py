@@ -519,7 +519,7 @@ def add_hfca_vaccsmc(campaign, smc_df, hfca, effective_coverage_resistance_multi
                                   target_group={'agemin': age_min_list[ii],
                                                 'agemax': age_max_list[ii]},
                                   ind_property_restrictions=[{'SMCAccess': access_list[ii]}],
-                                  receiving_drugs_event=False)  ## If False uses vaccSMC with automatic offset of 17 days, if True, uses vaccDrugSMC
+                                  also_deploy_drugs=False)  ## If False uses vaccSMC with automatic offset of 17 days, if True, uses vaccDrugSMC
 
     return len(df)
 
@@ -869,7 +869,7 @@ def add_ds_vaccpmc(campaign, pmc_df, hfca):
                                                    'delay_distribution_mean': df['distribution_mean'],
                                                    'delay_distribution_std': df['distribution_std']},
                           num_iiv_groups=num_iiv_groups,
-                          receiving_drugs_event=False)  ## use vaccine effects only with default offset of -10 days
+                          also_deploy_drugs=False)  ## use vaccine effects only with default offset of -10 days
 
     return len(pmc_df)
 
