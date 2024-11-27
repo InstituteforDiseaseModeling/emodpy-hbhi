@@ -19,12 +19,16 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
                           receiving_vaccine_event_name: str = None,
                           receiving_drugs_event_name: str = None,
                           num_iiv_groups: int = 1,
-                          receiving_drugs_event: bool = True):
+                          also_deploy_drugs: bool = True):
     """
         Add a vaccine + vehicle drug intervention to approximate efficacy of SMC or PMC, as specified in **campaign_type**,
         to the campaign. This intervention uses default parameters corresponding to SMC with SPAQ and PMC with SP, if not
         otherwise specified via vacc_param_dic, drug_param_dic. The vehicle drug instantly clear parasites (blood stage +
         liver stage) and the prophylactic effect is added by the vaccine event.
+
+        Note: To change drug parameters (including "Vehicle" drug) you will need to do that separately in the
+        config builder section of your code, because drug parameters need to be updated in the config object.
+        You can import make_vehicle_drug function into the config builder and use it there.
 
         Campaign type specifications:
         For SMC, the drug event (MDA drug campaign) is initiated at the specified simdays and generates a broadcast event
@@ -69,13 +73,6 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
 
                 {'vaccine_initial_effect': 0.598, 'vaccine_box_duration': 21.7, 'vaccine_decay_duration': 1.18}
 
-        drug_param_dict: Dictionary of three parameters for initial parasite clearing efficacy (drug campaign).
-            Default: Fitted parameters for SMC-SPAQ and PMC-SP.
-
-            Examples::
-
-                {'drug_irbc_killing': 18.6, 'drug_hep_killing': 1.5, 'drug_box_day': 2.0}
-
         delay_distribution_dict: Dictionary of lists of distribution parameters. Distributions allowed:
             "GAUSSIAN_DISTRIBUTION","LOG_NORMAL_DISTRIBUTION", "CONSTANT_DISTRIBUTION".
             for age-touchpoints, there is also an internal offset (please see code)
@@ -115,7 +112,7 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
         num_iiv_groups: Number of individual drug response groups.
             If >1, ind_property_restrictions is set to {'DrugResponseGroup': val} if campaign_type = PMC, not used for
             SMC. Default: SMC: Not used. PMC: 1, IIV only acts on the vaccine event, not the drug event
-        receiving_drugs_event: Specify whether to deploy the parasite clearing drug event or the vaccine event only.
+        also_deploy_drugs: Specify whether to deploy the parasite clearing drug event or the vaccine event only.
             Default: True
             Exception: for PMC, set to False
 
@@ -128,11 +125,11 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
         receiving_vaccine_event_name = f'Received_{campaign_type}_VaccDrug'
 
     if campaign_type == 'SMC':
-        if receiving_drugs_event:
+        if also_deploy_drugs:
             add_vaccdrug_smc(campaign, start_days=start_days, coverages=coverages,
-                             vaccine_param_dict=vaccine_param_dict, drug_param_dict=drug_param_dict,
+                             vaccine_param_dict=vaccine_param_dict,
                              target_group=target_group,
-                             receiving_drugs_event=receiving_drugs_event_name,
+                             receiving_drugs_event_name=receiving_drugs_event_name,
                              receiving_vaccine_event=receiving_vaccine_event_name,
                              node_ids=node_ids,
                              ind_property_restrictions=ind_property_restrictions,
@@ -153,12 +150,11 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
             raise ValueError(
                 'You passed in a trigger_condition for campaign_type PMC that is per default triggered by "Births". '
                 'trigger_condition_list needs to be empty.\n')
-        if receiving_drugs_event:
+        if also_deploy_drugs:
             add_vaccdrug_pmc(campaign, start_days=start_days, coverages=coverages,
                              target_group=target_group, num_iiv_groups=num_iiv_groups,
                              vaccine_param_dict=vaccine_param_dict,
-                             drug_param_dict=drug_param_dict,
-                             receiving_drugs_event=receiving_drugs_event_name,
+                             receiving_drugs_event_name=receiving_drugs_event_name,
                              receiving_vaccine_event=receiving_vaccine_event_name,
                              delay_distribution_dict=delay_distribution_dict,
                              node_ids=node_ids,
@@ -180,26 +176,36 @@ def add_vaccdrug_campaign(campaign, campaign_type: str = 'SMC', start_days: list
         raise ValueError('Invalid campaign_type specified, valid options: "SMC" or "PMC"')
 
 
-def make_vehicle_drug(campaign, drug_box_day: float = 0, drug_irbc_killing: float = 0, drug_hep_killing: float = 0):
+def make_vehicle_drug(config, drug_box_day: float = 0, drug_irbc_killing: float = 0, drug_hep_killing: float = 0):
+    """
+        Note: To change drug parameters (including "Vehicle" drug) you will need to do that separately in the
+        config builder section of your code, because drug parameters need to be updated in the config object.
+        You can import make_vehicle_drug function (see set_param_drug) into the config builder and use it there.
+
+    """
+
     if drug_box_day:
-        set_drug_param(campaign, "Vehicle", "Drug_Decay_T1", drug_box_day)
-        set_drug_param(campaign, "Vehicle", "Drug_Decay_T2", drug_box_day)
+        set_drug_param(config, "Vehicle", "Drug_Decay_T1", drug_box_day)
+        set_drug_param(config, "Vehicle", "Drug_Decay_T2", drug_box_day)
     if drug_irbc_killing:
-        set_drug_param(campaign, "Vehicle", "Max_Drug_IRBC_Kill", drug_irbc_killing)
+        set_drug_param(config, "Vehicle", "Max_Drug_IRBC_Kill", drug_irbc_killing)
     if drug_hep_killing:
-        set_drug_param(campaign, "Vehicle", "Drug_Hepatocyte_Killrate", drug_hep_killing)
+        set_drug_param(config, "Vehicle", "Drug_Hepatocyte_Killrate", drug_hep_killing)
 
     return {'drug_box_day': drug_box_day,
             'drug_irbc_killing': drug_irbc_killing,
             'drug_hep_killing': drug_hep_killing}
 
 
-def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
+def add_vaccdrug_smc(campaign, start_days: list,
+                     coverages: list,
                      target_group: dict = None,
                      node_ids: list = None,
-                     vaccine_param_dict: dict = None, drug_param_dict: dict = None,
-                     receiving_vaccine_event: str = None, receiving_drugs_event: str = None,
-                     listening_duration: int = -1, trigger_condition_list: list = None,
+                     vaccine_param_dict: dict = None,
+                     receiving_vaccine_event: str = None,
+                     receiving_drugs_event_name: str = None,
+                     listening_duration: int = -1,
+                     trigger_condition_list: list = None,
                      ind_property_restrictions: dict = None,
                      target_residents_only: int = 1,
                      check_eligibility_at_trigger: bool = False):
@@ -208,6 +214,10 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
         parameters corresponding to SMC with SPAQ, if not otherwise specified via vaccine_param_dict and drug_param_dict.
         The vehicle drug instantly clear parasites (blood stage + liver stage) and the prophylactic effect is added
         by the vaccine event.
+
+        Note: To change drug parameters (including "Vehicle" drug) you will need to do that separately in the
+        config builder section of your code, because drug parameters need to be updated in the config object.
+        You can import make_vehicle_drug function into the config builder and use it there.
 
         Campaign type specifications:
         For SMC, the drug event (MDA drug campaign) is initiated at the specified simdays and generates a broadcast event
@@ -232,12 +242,9 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
             vaccine_decay_duration/log(2)
             Example and Default: {'vaccine_initial_effect': 0.598, 'vaccine_box_duration': 21.7,
             'vaccine_decay_duration': 1.18}
-        drug_param_dict: dictionary of parameters for a drug to use with this intervention, these will be assigned
-            to the 'Vehicle' drug. Example and Default: {'drug_box_day': 2.0, 'drug_irbc_killing': 10.8,
-            'drug_hep_killing': 3.64}
         receiving_vaccine_event:  Event to send out when person received vaccine.
             Default: 'Received_<campaign_type>_VaccDrug'
-        receiving_drugs_event: Event to send out when person received drugs.
+        receiving_drugs_event_name: Event to send out when person received drugs.
             Event name needs to include 'Received_Vehicle' in it, as otherwise overwritten in drug_campaigns function
             (see drug_campaigns.py L247)
             Default: SMC: 'Received_Vehicle'
@@ -254,16 +261,6 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
             option to check individual/node's eligibility at the initial trigger
             or when the event is actually distributed after delay. (for example, a person might've aged out of the
             intervention before the initial trigger and the intervention distribution)
-        receiving_drugs_event_name: Event to send out when person received drugs.
-            Event name needs to include 'Received_Vehicle' in it, as otherwise overwritten in drug_campaigns function
-            (see drug_campaigns.py L247)
-            Default: SMC: 'Received_Vehicle'; PMC: 'Received_Vehicle_X' with X being number of PMC dose
-        num_iiv_groups: Number of individual drug response groups.
-            If >1, ind_property_restrictions is set to {'DrugResponseGroup': val} if campaign_type = PMC, not used for
-            SMC. Default: SMC: Not used; PMC: 1, IIV only acts on the vaccine event, not the drug event
-        receiving_drugs_event: Specify whether to deploy the parasite clearing drug event or the vaccine event only.
-            Default: True
-            Exception: for PMC, set to False
 
     Returns:
         dictionary of tags
@@ -278,19 +275,10 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
         target_age_max = target_group['agemax']
     if not vaccine_param_dict:
         vaccine_param_dict = {'vacc_initial_effect': 0.598, 'vacc_box_duration': 21.7, 'vacc_decay_duration': 1.18}
-    if not drug_param_dict:
-        # drug_param_dic = {'drug_irbc_killing': 18.6, 'drug_hep_killing': 1.5, 'drug_box_day': 2.0}
-        drug_param_dict = {'drug_box_day': 2.0, 'drug_irbc_killing': 10.8, 'drug_hep_killing': 3.64}
 
     vaccine_initial_effect = vaccine_param_dict['vacc_initial_effect']
     vaccine_box_duration = vaccine_param_dict['vacc_box_duration']
     vaccine_decay_duration = vaccine_param_dict['vacc_decay_duration']
-
-    drug_box_day = drug_param_dict['drug_box_day']
-    drug_irbc_killing = drug_param_dict['drug_irbc_killing']
-    drug_hep_killing = drug_param_dict['drug_hep_killing']
-    make_vehicle_drug(campaign, drug_box_day=drug_box_day, drug_irbc_killing=drug_irbc_killing,
-                      drug_hep_killing=drug_hep_killing)
 
     for (d, cov) in zip(start_days, coverages):
         add_drug_campaign(campaign, campaign_type='MDA',
@@ -304,7 +292,7 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
                           listening_duration=listening_duration,
                           target_group=target_group,
                           ind_property_restrictions=ind_property_restrictions,
-                          receiving_drugs_event_name=receiving_drugs_event,
+                          receiving_drugs_event_name=receiving_drugs_event_name,
                           trigger_condition_list=trigger_condition_list,
                           target_residents_only=target_residents_only,
                           node_ids=node_ids,
@@ -313,7 +301,7 @@ def add_vaccdrug_smc(campaign, start_days: list, coverages: list,
     add_triggered_vaccine(campaign,
                           start_day=start_days[0],  # otherwise it won't "hear" the first round of drugs
                           demographic_coverage=1,
-                          trigger_condition_list=[receiving_drugs_event],
+                          trigger_condition_list=[receiving_drugs_event_name],
                           listening_duration=listening_duration,
                           target_age_min=target_age_min,
                           target_age_max=target_age_max,
@@ -394,9 +382,11 @@ def add_vacc_smc(campaign, start_days, coverages, target_group: dict = None,
 def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
                      target_group: dict = None,
                      num_iiv_groups: int = 1,
-                     vaccine_param_dict: dict = None, drug_param_dict: dict = None,
-                     receiving_vaccine_event: str = None, receiving_drugs_event: str = None,
-                     listening_duration: int = -1, node_ids: list = None,
+                     vaccine_param_dict: dict = None,
+                     receiving_vaccine_event: str = None,
+                     receiving_drugs_event_name: str = None,
+                     listening_duration: int = -1,
+                     node_ids: list = None,
                      delay_distribution_dict: dict = None,
                      ind_property_restrictions: dict = None, target_residents_only: int = 1,
                      check_eligibility_at_trigger: bool = False):
@@ -409,9 +399,8 @@ def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
         target_group:
         num_iiv_groups:
         vaccine_param_dict:
-        drug_param_dict:
         receiving_vaccine_event:
-        receiving_drugs_event:
+        receiving_drugs_event_name:
         listening_duration:
         node_ids:
         delay_distribution_dict:
@@ -425,18 +414,10 @@ def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
 
     if not vaccine_param_dict:
         vaccine_param_dict = {'vacc_initial_effect': 0.85, 'vacc_box_duration': 13.20, 'vacc_decay_duration': 11.53}
-    if not drug_param_dict:
-        drug_param_dict = {'drug_irbc_killing': 16.03, 'drug_hep_killing': 0.92, 'drug_box_day': 2.0}
 
     vaccine_initial_effect = vaccine_param_dict['vacc_initial_effect']
     vaccine_box_duration = vaccine_param_dict['vacc_box_duration']
     vaccine_decay_duration = vaccine_param_dict['vacc_decay_duration']
-
-    drug_box_day = drug_param_dict['drug_box_day']
-    drug_irbc_killing = drug_param_dict['drug_irbc_killing']
-    drug_hep_killing = drug_param_dict['drug_hep_killing']
-    make_vehicle_drug(campaign, drug_box_day=drug_box_day, drug_irbc_killing=drug_irbc_killing,
-                      drug_hep_killing=drug_hep_killing)
 
     pmc_touchpoints = list(target_group.values())
     pmc_event_names = [f'PMC_{x + 1}' for x in range(len(pmc_touchpoints))]
@@ -488,7 +469,7 @@ def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
                           listening_duration=listening_duration,
                           trigger_condition_list=[event_name],
                           ind_property_restrictions=ind_property_restrictions,
-                          receiving_drugs_event_name=f'{receiving_drugs_event}_{i + 1}',
+                          receiving_drugs_event_name=f'{receiving_drugs_event_name}_{i + 1}',
                           node_ids=node_ids,
                           target_residents_only=target_residents_only,
                           check_eligibility_at_trigger=check_eligibility_at_trigger
@@ -512,7 +493,7 @@ def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
 
                 add_triggered_vaccine(campaign,
                                       start_day=start_days[0],
-                                      trigger_condition_list=[f'{receiving_drugs_event}_{i + 1}'],
+                                      trigger_condition_list=[f'{receiving_drugs_event_name}_{i + 1}'],
                                       demographic_coverage=1,
                                       ind_property_restrictions=[{'DrugResponseGroup': val}],
                                       broadcast_event=receiving_vaccine_event,
@@ -526,7 +507,7 @@ def add_vaccdrug_pmc(campaign, start_days: list, coverages: list,
         else:
             add_triggered_vaccine(campaign,
                                   start_day=start_days[0],
-                                  trigger_condition_list=[f'{receiving_drugs_event}_{i + 1}'],
+                                  trigger_condition_list=[f'{receiving_drugs_event_name}_{i + 1}'],
                                   demographic_coverage=1,
                                   ind_property_restrictions=ind_property_restrictions,
                                   broadcast_event=receiving_vaccine_event,
