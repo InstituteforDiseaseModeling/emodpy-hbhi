@@ -39,8 +39,9 @@ def _post_run(experiment: Experiment, **kwargs):
     Return:
         None
     """
-    with open("monique\\run_future_scenarios\\experiment_id.txt", "w") as fd:
-        fd.write(experiment.uid.hex)
+    if experiment.succeeded:
+        with open("monique\\run_future_scenarios\\experiment_id.txt", "w") as fd:
+            fd.write(experiment.uid.hex)
     pass
 
 
@@ -94,7 +95,7 @@ if __name__ == "__main__":
     - show_warnings_once=False: show api warnings for all simulations
     - show_warnings_once=None:  not show api warnings
     """
-    platform = Platform('CALCULON', node_group='idm_48cores')
+    platform = Platform('CALCULON', node_group='emod_abcd')
     # platform = Platform('IDMCLOUD', node_group='emod_abcd')
 
     # If you don't have Eradication, un-comment out the following to download Eradication

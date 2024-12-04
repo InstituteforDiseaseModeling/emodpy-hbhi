@@ -128,11 +128,10 @@ def get_spline_values4(hfca, project_path):
     hdf = habitat_scales(project_path)
 
     df = pd.DataFrame({'Name': ['MonthVal%d' % x for x in range(1, 13)],
-                       'Guess': [0.0075] * 12,
+                       'Guess': [0.01] * 12,
                        'Min': [0.00001] * 12,
-                       'Max': [0.1] * 12})  # !0.01
-
-    df = pd.concat([df, pd.DataFrame({'Name': ['MaxHab'], 'Guess': [10], 'Min': [8], 'Max': [12.5]})])
+                       'Max': [1] * 12})  # !0.01
+    df = pd.concat([df, pd.DataFrame({'Name': ['MaxHab'], 'Guess': [11], 'Min': [8], 'Max': [12.2]})])
     df['Dynamic'] = True
 
     a = hdf.at[hfca, 'arabiensis_scale_factor']
@@ -152,13 +151,13 @@ def get_spline_values4_constantMaxHab(hfca, project_path):
     hdf = habitat_scales(project_path)
 
     df = pd.DataFrame({'Name': ['MonthVal%d' % x for x in range(1, 13)],
-                       'Guess': [0.0075] * 12,
+                       'Guess': [0.01] * 12,
                        'Min': [0.00001] * 12,
                        'Max': [1] * 12})  # !0.01
     df['Dynamic'] = True
 
     df = pd.concat(
-        [df, pd.DataFrame({'Name': ['MaxHab'], 'Guess': [10], 'Min': [10], 'Max': [10], 'Dynamic': [False]})])
+        [df, pd.DataFrame({'Name': ['MaxHab'], 'Guess': [12], 'Min': [12], 'Max': [12], 'Dynamic': [False]})])
 
     a = hdf.at[hfca, 'arabiensis_scale_factor']
     f = hdf.at[hfca, 'funestus_scale_factor']

@@ -71,8 +71,8 @@ class monthlyU5PfPRAnalyzer(IAnalyzer):
         self.start_year = start_year
         self.end_year = end_year
 
-    def filter(self, simulation):
-        return simulation.status.name == 'Succeeded'
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
 
     def map(self, data, simulation):
 
@@ -315,6 +315,72 @@ class monthlyPrevalenceAnalyzer(IAnalyzer):
         adf.to_csv(os.path.join(self.working_dir, self.expt_name, 'All_Age_monthly_prevalence.csv'), index=False)
 
 
+class monthlyEventAnalyzerITN(IAnalyzer):
+
+    @classmethod
+    def monthparser(self, x):
+        if x == 0:
+            return 12
+        else:
+            return datetime.datetime.strptime(str(x), '%j').month
+
+    def __init__(self, expt_name, channels=None, sweep_variables=None, working_dir=".", start_year=2020, end_year=2026, output_file_suffix=''):
+        super(monthlyEventAnalyzerITN, self).__init__(working_dir=working_dir,
+                                                   filenames=["output/ReportEventCounter.json"]
+                                                   )
+        self.sweep_variables = sweep_variables or ["admin_name", "Run_Number"]
+        if channels is None:
+            self.channels = ['Received_Treatment', 'Received_Severe_Treatment', 'Received_NMF_Treatment',
+                             'Received_Self_Medication', 'Bednet_Using', # 'Bednet_Got_New_One',
+                             # currently removed 'Bednet_Got_New_One', since length is 1 longer than expected for unknown reasons
+                             'Received_Campaign_Drugs', 'Received_IRS', 'Received_Vaccine', 'Received_PMC_VaccDrug']
+        else:
+            self.channels = channels
+        self.expt_name = expt_name
+        self.start_year = start_year
+        self.end_year = end_year
+        self.output_file_suffix = output_file_suffix
+
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
+
+    def map(self, data, simulation):
+
+        channels_in_expt = [x for x in self.channels if x in data[self.filenames[0]]['Channels'].keys()]
+
+        simdata = pd.DataFrame({x: data[self.filenames[0]]['Channels'][x]['Data'] for x in channels_in_expt})
+        simdata['Time'] = simdata.index + 1
+
+        simdata['Day'] = simdata['Time'] % 365
+        simdata['month'] = simdata['Day'].apply(lambda x: self.monthparser((x + 1) % 365))
+        simdata['year'] = simdata['Time'].apply(lambda x: int(x / 365) + self.start_year)
+
+        for missing_channel in [x for x in self.channels if x not in channels_in_expt]:
+            simdata[missing_channel] = 0
+
+        for sweep_var in self.sweep_variables:
+            if sweep_var in simulation.tags.keys():
+                simdata[sweep_var] = simulation.tags[sweep_var]
+        return simdata
+
+    def reduce(self, all_data):
+
+        selected = [data for sim, data in all_data.items()]
+        if len(selected) == 0:
+            print("No data have been returned... Exiting...")
+            return
+
+        if not os.path.exists(os.path.join(self.working_dir, self.expt_name)):
+            os.mkdir(os.path.join(self.working_dir, self.expt_name))
+
+        adf = pd.concat(selected).reset_index(drop=True, )
+        adf['date'] = adf.apply(lambda x: datetime.date(x['year'], x['month'], 1), axis=1)
+
+        df = adf.groupby(['admin_name', 'date', 'Run_Number'])[self.channels].agg(np.sum).reset_index()
+        df.to_csv(os.path.join(self.working_dir, self.expt_name, 'monthly_Event_Count%s.csv' % self.output_file_suffix), index=False)
+
+
+
 class monthlyEventAnalyzer(IAnalyzer):
 
     @classmethod
@@ -324,14 +390,14 @@ class monthlyEventAnalyzer(IAnalyzer):
         else:
             return datetime.datetime.strptime(str(x), '%j').month
 
-    def __init__(self, expt_name, channels=None, sweep_variables=None, working_dir=".", start_year=2020, end_year=2026):
+    def __init__(self, expt_name, channels=None, sweep_variables=None, working_dir=".", start_year=2020, end_year=2026, output_file_suffix=''):
         super(monthlyEventAnalyzer, self).__init__(working_dir=working_dir,
                                                    filenames=["output/ReportEventCounter.json"]
                                                    )
         self.sweep_variables = sweep_variables or ["admin_name", "Run_Number"]
         if channels is None:
             self.channels = ['Received_Treatment', 'Received_Severe_Treatment', 'Received_NMF_Treatment',
-                             'Received_Self_Medication', 'Bednet_Using', 'Bednet_Got_New_One',
+                             'Received_Self_Medication', 'Bednet_Using', # 'Bednet_Got_New_One',
                              # currently removed 'Bednet_Got_New_One', since length is 1 longer than expected for unknown reasons
                              'Received_Campaign_Drugs', 'Received_IRS', 'Received_Vaccine', 'Received_PMC_VaccDrug']
         else:
@@ -339,9 +405,10 @@ class monthlyEventAnalyzer(IAnalyzer):
         self.expt_name = expt_name
         self.start_year = start_year
         self.end_year = end_year
+        self.output_file_suffix = output_file_suffix
 
-    def filter(self, simulation):
-        return simulation.status.name == 'Succeeded'
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
 
     def map(self, data, simulation):
 
@@ -376,7 +443,7 @@ class monthlyEventAnalyzer(IAnalyzer):
         adf['date'] = adf.apply(lambda x: datetime.date(x['year'], x['month'], 1), axis=1)
 
         df = adf.groupby(['admin_name', 'date', 'Run_Number'])[self.channels].agg(np.sum).reset_index()
-        df.to_csv(os.path.join(self.working_dir, self.expt_name, 'monthly_Event_Count.csv'), index=False)
+        df.to_csv(os.path.join(self.working_dir, self.expt_name, 'monthly_Event_Count%s.csv' % self.output_file_suffix), index=False)
 
 
 class monthlySevereTreatedByAgeAnalyzer(IAnalyzer):
@@ -540,8 +607,8 @@ class MonthlyNewInfectionsAnalyzer(IAnalyzer):
         self.end_year = end_year
         self.output_filename = output_filename
 
-    def filter(self, simulation):
-        return simulation.status.name == 'Succeeded'
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
 
     def map(self, data, simulation):
 
@@ -650,8 +717,8 @@ class MonthlyNewInfectionsAnalyzer_withU5(IAnalyzer):
         self.end_year = end_year
         self.output_filename = output_filename
 
-    def filter(self, simulation):
-        return simulation.status.name == 'Succeeded'
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
 
     def map(self, data, simulation):
 
@@ -777,8 +844,8 @@ class MonthlyNewInfectionsAnalyzerByAge(IAnalyzer):
         self.end_year = end_year
         self.output_filename = output_filename
 
-    def filter(self, simulation):
-        return simulation.status.name == 'Succeeded'
+    # def filter(self, simulation):
+    #     return simulation.status.name == 'Succeeded'
 
     def map(self, data, simulation):
 
@@ -1017,8 +1084,8 @@ if __name__ == "__main__":
                                                   output_filename='newInfections_PfPR_cases_monthly_byAgeGroup.csv')
 
             ]
-            am = AnalyzeManager(platform=platform, ids=[expid, ItemType.EXPERIMENT], analyzers=analyzers,
-                                force_analyze=True)
+            am = AnalyzeManager(platform=platform, ids=[(expid, ItemType.EXPERIMENT)], analyzers=analyzers,
+                                analyze_failed_items=True)
             am.analyze()
 
     elif include_LLINp:

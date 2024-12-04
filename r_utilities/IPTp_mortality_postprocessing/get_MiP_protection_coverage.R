@@ -56,7 +56,7 @@ get_IPTp_coverages = function(iptp_estimates_filename, iptp_dose_number_filename
   ## - - - - - - - - - - - - - - - - - - - - ##
   
   if (!future_projection_flag){
-    if(coverage_string == 'noCoverage'){
+    if(coverage_string %in% c('noCoverage', 'none')){
       project_coverage = rep(0, length(iptp_coverage_df[,dim(iptp_coverage_df)[2]]))
       project_dose_number = iptp_dose_number[,dim(iptp_dose_number)[2]]
       
@@ -89,14 +89,37 @@ get_IPTp_coverages = function(iptp_estimates_filename, iptp_dose_number_filename
       iptp_relative_risk = iptp_relative_risk_estimateBetterProtection
       
     } else if(coverage_string != 'curCoverage') warning('coverage string not recognized for historical simulations... assuming estimated true coverage')
+    
+    # make sure that values are included for all years
+    if (first_year < min(as.numeric(gsub('X','', colnames(iptp_coverage_df)[-1])))){
+      warning('The first year of the IPTp coverage dataframe is after the first year of the simulation. Need to add more IPTp data/assumptions.')
+    }
+    if(last_year > max(as.numeric(gsub('X','', colnames(iptp_coverage_df)[-1])))){
+      warning('The simulation continues for more years than supplied in the IPTp coverage dataframe. Assuming continuation of lastest coverage. To use a different assumption, need to update IPTp input file.')
+      # use coverage from latest year for projections
+      project_coverage = iptp_coverage_df[,dim(iptp_coverage_df)[2]]
+      project_dose_number = iptp_dose_number[,dim(iptp_dose_number)[2]]
       
+      for(yy in (max(as.numeric(gsub('X','', colnames(iptp_coverage_df)[-1])))+1):last_year){
+        # update iptp coverage (>=1 dose)
+        new_coverage_df = data.frame(project_coverage)
+        colnames(new_coverage_df) = yy
+        iptp_coverage_df = cbind(iptp_coverage_df, new_coverage_df)
+        
+        # update iptp doses (of covered individuals, how many doses received?)
+        new_dose_df = data.frame(project_dose_number)
+        colnames(new_dose_df) = yy
+        iptp_dose_number = cbind(iptp_dose_number, new_dose_df)
+      }
+    }
+    
   ## - - - - - - - - - - - - - - - - - - - - ##
   # simulations of future transmission
   ## - - - - - - - - - - - - - - - - - - - - ##
   } else{
     constant_future_values = TRUE
     # replace entries with projection scenario
-    if(coverage_string == 'noCoverage'){
+    if(coverage_string %in% c('noCoverage', 'none')){
       project_coverage = rep(0, length(iptp_coverage_df[,dim(iptp_coverage_df)[2]]))
       project_dose_number = iptp_dose_number[,dim(iptp_dose_number)[2]]
       iptp_coverage_df = data.frame('admin_name' = admin_names)
@@ -387,6 +410,36 @@ get_IPTp_coverages = function(iptp_estimates_filename, iptp_dose_number_filename
       
       # use coverage from latest year for first two years of projections
       num_years_cur_coverage = 2
+      project_coverage = iptp_coverage_df[,dim(iptp_coverage_df)[2]]
+      project_0_coverage = rep(0, length(iptp_coverage_df[,dim(iptp_coverage_df)[2]]))
+      project_dose_number = iptp_dose_number[,dim(iptp_dose_number)[2]]
+      iptp_coverage_df = data.frame('admin_name' = admin_names)
+      iptp_dose_number = data.frame('doses' = c(1,2,3))
+      for(yy in first_year:last_year){
+        if(yy < (first_year+num_years_cur_coverage)){
+          # update iptp coverage (>=1 dose)
+          new_coverage_df = data.frame(project_coverage)
+          colnames(new_coverage_df) = yy
+          iptp_coverage_df = cbind(iptp_coverage_df, new_coverage_df)
+        } else{
+          # update iptp coverage (>=1 dose)
+          new_coverage_df = data.frame(project_0_coverage)
+          colnames(new_coverage_df) = yy
+          iptp_coverage_df = cbind(iptp_coverage_df, new_coverage_df)        
+        }
+        # update iptp doses (of covered individuals, how many doses received?)
+        new_dose_df = data.frame(project_dose_number)
+        colnames(new_dose_df) = yy
+        iptp_dose_number = cbind(iptp_dose_number, new_dose_df)
+      }
+      # remove first column
+      iptp_dose_number = iptp_dose_number[,-1]
+    } else if (coverage_string == 'stopAfterThreeYears'){
+      # keep current values for 2 years, then discontinue
+      constant_future_values = FALSE
+      
+      # use coverage from latest year for first two years of projections
+      num_years_cur_coverage = 3
       project_coverage = iptp_coverage_df[,dim(iptp_coverage_df)[2]]
       project_0_coverage = rep(0, length(iptp_coverage_df[,dim(iptp_coverage_df)[2]]))
       project_dose_number = iptp_dose_number[,dim(iptp_dose_number)[2]]

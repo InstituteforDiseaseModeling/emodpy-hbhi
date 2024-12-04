@@ -16,7 +16,7 @@ demographics_file = os.path.join('demographics_and_climate', '_entire_country',
                                  f'demographics_each_admin_{population_size}.json')
 
 use_arch_burnin = True
-burnin_id = 'cab2ccbc-f70a-ee11-aa07-b88303911bc1'  # <- on IDMCloud  # generated from serialize_transmission_sweep (1960-2010)
+burnin_id = 'eb89ea6e-2f53-ee11-aa0a-b88303911bc1'  # 'cab2ccbc-f70a-ee11-aa07-b88303911bc1'  # <- on IDMCloud  # generated from serialize_transmission_sweep (1960-2010)
 
 scenario_fname = os.path.join(manifest.project_path, 'simulation_inputs', '_intervention_file_references',
                               'Interventions_to_present.csv')

@@ -11,6 +11,7 @@ library(pals)
 library(prettyGraphs) 
 library(lubridate)
 library(gridExtra) 
+library(geofacet)
 
 
 ##############################################################
@@ -126,7 +127,7 @@ aggregate_itn_dhs_data_across_years = function(hbhi_dir, years, itn_variables, m
     }
     colnames(net_dhs_info)[which(colnames(net_dhs_info)=='NOMDEP')] = 'admin_name'
     colnames(net_dhs_info)[which(colnames(net_dhs_info)=='mean_date')] = 'date'
-    write.csv(net_dhs_info, paste0(hbhi_dir, '/estimates_from_DHS/DHS_ITN_dates_and_rates.csv'))
+    write.csv(net_dhs_info, net_dhs_filename)
   }
   return(net_dhs_info)
 }
@@ -152,9 +153,9 @@ aggregate_itn_dhs_data_across_years = function(hbhi_dir, years, itn_variables, m
 #    - net_life_lognormal_mu  # for the Expiration_Period_Log_Normal_Mu parameter in the lognormal decay distribution (time before nets discarded, lost, forgotten, etc.).
 #    - net_life_lognormal_sigma
 # single seed and admins may have different mass distributions dates
-create_itn_input_from_DHS_differentDates = function(hbhi_dir, itn_variables, itn_distributions_by_admin_filename, sim_start_year=2010, maximum_coverage=0.9,
+create_itn_input_from_DHS_differentDates = function(hbhi_dir, itn_variables, itn_distributions_by_admin_filename, grid_layout_state_locations, sim_start_year=2010, maximum_coverage=0.9,
                                                     seasonality_monthly_scalar,  # adjust net usage for seasonality
-                                                    years, min_num_total=30, default_first_coverage=0.1, itn_variable_base='itn_u5', save_age_ratio_plots=FALSE, save_timeseries_coverage_plots=FALSE 
+                                                    years, min_num_total=30, default_first_coverage=0.1, itn_variable_base='itn_u5', save_age_ratio_plots=FALSE, save_timeseries_coverage_plots=FALSE
 ){
   # get the distribution dates for each admin
   itn_distributions_by_admin = read.csv(itn_distributions_by_admin_filename) 
@@ -360,6 +361,106 @@ create_itn_input_from_DHS_differentDates = function(hbhi_dir, itn_variables, itn
       theme(legend.position='none') +
       facet_wrap('State', nrow=5)
     ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_rate_timeseries_extrapolation_build0.png'), plot=ggb, width=18, height=15, units='in', dpi=900)
+    
+    
+    itn_distributions_by_state_raw_filename = gsub('/[^/]*.csv','/uncorrected_mass_dist_dates_state.csv',itn_distributions_by_admin_filename)
+    if(file.exists(itn_distributions_by_state_raw_filename)){
+      llin_info_raw_state = read.csv(itn_distributions_by_state_raw_filename)
+      net_dhs_info$code = net_dhs_info$NOMREGION
+      llin_info_raw_state$code = llin_info_raw_state$State
+      llin_info_raw_state$date = as.Date(llin_info_raw_state$date)
+
+      ggc1 = ggplot(grid_layout_state_locations)+
+        # geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_from_dhs.png'), plot=ggc1, width=9, height=6, units='in', dpi=1600)
+      
+      ggc = ggplot(grid_layout_state_locations)+
+        geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_from_dhs_and_raw_dist_dates.png'), plot=ggc, width=9, height=6, units='in', dpi=1600)
+      
+      coverage_df$code = coverage_df$State
+      ggd = ggplot(grid_layout_state_locations)+
+        geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_point(data=coverage_df, aes(x=date), y=1, col='blue', shape='|', size=7) +
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_from_dhs_and_estimated_dist_dates.png'), plot=ggd, width=9, height=6, units='in', dpi=1600)
+      
+      ggdv2 = ggplot(grid_layout_state_locations)+
+        # geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_vline(data=coverage_df, aes(xintercept=date), color='blue',  size=0.3) +
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_from_dhs_and_estimated_dist_dates_v2.png'), plot=ggdv2, width=9, height=6, units='in', dpi=1600)
+      
+      
+      coverage_timeseries$code = coverage_timeseries$State
+      gge = ggplot(grid_layout_state_locations)+
+        geom_line(data=coverage_timeseries, aes(x=date, y=adjusted_coverage, col=admin_name), linewidth=0.15) +
+        geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_point(data=coverage_df, aes(x=date), y=1, col='blue', shape='|', size=7) +
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_timeseries_from_dhs_and_estimated_dist_dates.png'), plot=gge, width=9, height=6, units='in', dpi=1600)
+      
+      
+      ggev2 = ggplot(grid_layout_state_locations)+
+        geom_line(data=coverage_timeseries, aes(x=date, y=adjusted_coverage, col=admin_name), linewidth=0.15) +
+        # geom_vline(data=llin_info_raw_state, aes(xintercept=date), color='darkgreen')+
+        geom_vline(data=coverage_df, aes(xintercept=date), color='blue',  size=0.3) +
+        geom_hline(aes(yintercept=0), color='black')+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate), color='black', size=0.8)+
+        geom_point(data=net_dhs_info, aes(x=date, y=itn_u5_rate, color=admin_name), size=0.6)+
+        scale_y_continuous(guide = guide_axis(check.overlap = TRUE)) +
+        scale_x_date(guide = guide_axis(check.overlap = TRUE), breaks=as.Date(paste0(c(2012,2016,2020),'/01/01')), labels=c(2012,2016,2020)) +
+        coord_cartesian(xlim=c(as.Date('2010-01-01'), as.Date('2023-01-01'))) +
+        theme_classic()+
+        theme(legend.position='none') +
+        facet_geo(~code, grid = grid_layout_state_locations, label="name", scales='fixed') 
+      ggsave(filename=paste0(hbhi_dir, '/simulation_inputs/plots/itn_use_timeseries_from_dhs_and_estimated_dist_dates_v2.png'), plot=ggev2, width=9, height=6, units='in', dpi=1600)
+      
+      
+    }
+
   }
 }
 

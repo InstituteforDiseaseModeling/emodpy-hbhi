@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import emodpy_malaria.malaria_config as malaria_config
 from emodpy_malaria.malaria_config import configure_linear_spline, set_species_param, add_species
-from emod_api.interventions.common import change_individual_property_scheduled
+from emod_api.interventions.common import change_individual_property_scheduled, change_individual_property_at_age
 import emod_api.config.default_from_schema_no_validation as dfs
 
 
@@ -54,6 +54,8 @@ def habitat_scales(project_path):
 
 def set_input_files(config, hfca, archetype_hfca, population_size=1000):
     config.parameters.Climate_Model = "CLIMATE_CONSTANT"
+    config.parameters.Base_Air_Temperature = 25
+    config.parameters.Base_Land_Temperature = 25
     config.parameters["DS"] = hfca
     config.parameters["Archetype"] = archetype_hfca
     return {'DS': hfca}
@@ -162,58 +164,60 @@ def load_master_csv(project_path):
     return df
 
 
-def update_smc_access_ips(campaign, hfca, smc_df):
-    # done
+def update_smc_access_ips(campaign, hfca, smc_df, use_same_access_ips_all_ages=False):
     df = smc_df[smc_df['admin_name'] == hfca]
 
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # # Original approach was to set IPs at the beginning of the simulation and then update individuals' IPs at their birthday.
-    # # However, this does not work as expected because individuals born before the start of the simulation are missed by the birthday-triggered IP change
-    # #  (it appears that it is birth-triggered with a delay, so it doesn't get applied to anyone who was already born when the simulation begins).
-    #
-    # # set IPs at beginning of simulation (does not use IPs from burnin since SMC coverage may change)
-    # change_individual_property(cb, 'SMCAccess', 'Low', target={'agemin': 0, 'agemax': 5}, coverage=1, blackout_flag=False)
-    # change_individual_property(cb, 'SMCAccess', 'High', target={'agemin': 0, 'agemax': 5}, coverage=df['high_access_U5'].values[0], blackout_flag=False)
-    # change_individual_property(cb, 'SMCAccess', 'Low', target={'agemin': 5, 'agemax': 120}, coverage=1, blackout_flag=False)
-    # change_individual_property(cb, 'SMCAccess', 'High', target={'agemin': 5, 'agemax': 120}, coverage=df['high_access_5_10'].values[0], blackout_flag=False)
-    #
-    # # set how IPs change as individuals are born or age
-    # change_individual_property_at_age(cb, 'SMCAccess', 'Low', 1, coverage=1)
-    # change_individual_property_at_age(cb, 'SMCAccess', 'High', 2, coverage=df['high_access_U5'].values[0])
-    # change_individual_property_at_age(cb, 'SMCAccess', 'Low', 365*5, coverage=1)
-    # change_individual_property_at_age(cb, 'SMCAccess', 'High', (365*5+1), coverage=df['high_access_5_10'].values[0])
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    if use_same_access_ips_all_ages:
+        # Set IPs at the beginning of the simulation and then update individuals' IPs at their birthday.
+        # However, individuals born before the start of the simulation are missed by the birthday-triggered IP change
+        #  (it is birth-triggered with a delay, so it doesn't get applied to anyone who was already born when the simulation begins).
+        # I believe this approach only works if we use the same access IPs for individuals of all ages (therefore, it does not support different high-access fractions for U5 versus 5-10
+        if 'high_access' in df.columns:
+            high_access_fraction = df['high_access'].values[0]
+        else:
+            high_access_fraction = df['high_access_U5'].values[0]
 
-    # change SMCAccess property of newborns (important for those born after the first SMC round in a year)
-    if df.shape[0] > 0:
-        # SVET - no blackout_flag available, but result is same as blackout_flag=False
+        # set IPs at beginning of simulation (does not use IPs from burnin since SMC coverage may change)
         change_individual_property_scheduled(campaign, coverage=1,
-                                             new_ip_key='SMCAccess', new_ip_value="Low",
-                                             target_age_min=0, target_age_max=5)
+                                             new_ip_key='SMCAccess', new_ip_value="Low")
         change_individual_property_scheduled(campaign, coverage=df['high_access_U5'].values[0],
-                                             new_ip_key='SMCAccess', new_ip_value="High",
-                                             target_age_min=0, target_age_max=5)
+                                             new_ip_key='SMCAccess', new_ip_value="High")
 
-        # before the first SMC round in each year, change the SMCAccess IP for the U5 and O5 age groups
-        # simdays of the first rounds (change IPs one week before)
-        first_round_days = df.loc[df['round'] == 1, 'simday'].values
-        change_ip_days = [first_round_days[yy] - 7 for yy in range(len(first_round_days))]
+        # set how IPs change as individuals are born or age
+        change_individual_property_at_age(campaign, 'SMCAccess', 'Low', 1, coverage=1)
+        change_individual_property_at_age(campaign, 'SMCAccess', 'High', 2, coverage=high_access_fraction)
 
-        for rr in change_ip_days:
-            change_individual_property_scheduled(campaign, start_day=rr, coverage=1,
+    else:  # change the SMCAccess each year, but this does mean scrambling who is in low versus high access group between years
+        # change SMCAccess property of newborns (important for those born after the first SMC round in a year)
+        if df.shape[0] > 0:
+            change_individual_property_scheduled(campaign, coverage=1,
                                                  new_ip_key='SMCAccess', new_ip_value="Low",
                                                  target_age_min=0, target_age_max=5)
-            change_individual_property_scheduled(campaign, start_day=rr, coverage=df['high_access_U5'].values[0],
+            change_individual_property_scheduled(campaign, coverage=df['high_access_U5'].values[0],
                                                  new_ip_key='SMCAccess', new_ip_value="High",
                                                  target_age_min=0, target_age_max=5)
-            change_individual_property_scheduled(campaign, start_day=rr, coverage=1,
-                                                 new_ip_key='SMCAccess', new_ip_value="Low",
-                                                 target_age_min=5, target_age_max=120)
-            change_individual_property_scheduled(campaign, start_day=rr, coverage=df['high_access_5_10'].values[0],
-                                                 new_ip_key='SMCAccess', new_ip_value="High",
-                                                 target_age_min=5, target_age_max=120)
 
+            # before the first SMC round in each year, change the SMCAccess IP for the U5 and O5 age groups
+            # simdays of the first rounds (change IPs one week before)
+            first_round_days = df.loc[df['round'] == 1, 'simday'].values
+            change_IP_days = [first_round_days[yy] - 7 for yy in range(len(first_round_days))]
+
+            for rr in change_IP_days:
+                change_individual_property_scheduled(campaign, start_day=rr, coverage=1,
+                                                     new_ip_key='SMCAccess', new_ip_value="Low",
+                                                     target_age_min=0, target_age_max=5)
+                change_individual_property_scheduled(campaign, start_day=rr, coverage=df['high_access_U5'].values[0],
+                                                     new_ip_key='SMCAccess', new_ip_value="High",
+                                                     target_age_min=0, target_age_max=5)
+                change_individual_property_scheduled(campaign, start_day=rr, coverage=1,
+                                                     new_ip_key='SMCAccess', new_ip_value="Low",
+                                                     target_age_min=5, target_age_max=120)
+                change_individual_property_scheduled(campaign, start_day=rr, coverage=df['high_access_5_10'].values[0],
+                                                     new_ip_key='SMCAccess', new_ip_value="High",
+                                                     target_age_min=5, target_age_max=120)
     return {'admin_name': hfca}
+
+
 
 
 def set_drug_params(config):
@@ -221,15 +225,22 @@ def set_drug_params(config):
     malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_Cmax", 270)
     malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_Decay_T1", 0.7)
     malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_Decay_T2", 15.9)
-    malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_PKPD_C50", 55)
+    malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_PKPD_C50", 150)  # param2: 55)
     malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_Vd", 1)
-    malaria_config.set_drug_param(config, 'Amodiaquine', "Max_Drug_IRBC_Kill", 0.2)
+    malaria_config.set_drug_param(config, 'Amodiaquine', "Max_Drug_IRBC_Kill", 0.23)  # param2: 0.2)
 
     # SulfadoxinePyrimethamine
     malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Drug_Decay_T1", 11.5)
     malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Drug_Decay_T2", 11.5)
-    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Drug_PKPD_C50", 0.9)
-    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Max_Drug_IRBC_Kill", 0.28)
+    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Drug_PKPD_C50", 3)  # param2: 0.9)
+    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Max_Drug_IRBC_Kill", 0.28)  # param2: 0.28)
+
+
+def update_smc_drug_params(config, row):
+    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Drug_PKPD_C50", row['sp_c50'])
+    malaria_config.set_drug_param(config, 'SulfadoxinePyrimethamine', "Max_Drug_IRBC_Kill", row['sp_kill'])
+    malaria_config.set_drug_param(config, 'Amodiaquine', "Drug_PKPD_C50", row['aq_c50'])
+    malaria_config.set_drug_param(config, 'Amodiaquine', "Max_Drug_IRBC_Kill", row['sp_kill'])
 
 
 if __name__ == "__main__":

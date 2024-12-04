@@ -1,4 +1,6 @@
 import warnings
+import os
+import math
 import pandas as pd
 import numpy as np
 from emodpy_malaria.interventions.treatment_seeking import add_treatment_seeking
@@ -12,8 +14,19 @@ from snt.support_files.malaria_vaccdrug_campaigns import add_vaccdrug_campaign
 from emodpy_malaria.interventions.adherentdrug import adherent_drug
 from snt.helpers_sim_setup import update_smc_access_ips
 from emodpy_malaria.interventions.vaccine import add_scheduled_vaccine, add_triggered_vaccine
-from emodpy_malaria.interventions.common import add_triggered_campaign_delay_event
-from emod_api.interventions.common import BroadcastEvent, DelayedIntervention
+from emodpy_malaria.interventions.common import add_triggered_campaign_delay_event, add_campaign_event
+from emod_api.interventions.common import BroadcastEvent, PropertyValueChanger, DelayedIntervention, change_individual_property_scheduled
+
+def tryread_intervention_csv_from_scen_df(project_path, scen_df, scen_index, intervention_colname):
+    if (pd.isna(scen_df.at[scen_index, intervention_colname])) or ((scen_df.at[scen_index, intervention_colname] == '')):
+        df = pd.DataFrame()
+    else:
+        try:
+            df = pd.read_csv(os.path.join(project_path, 'simulation_inputs', '%s.csv' % scen_df.at[scen_index, intervention_colname]))
+        except IOError:
+            print(f"WARNING: Cannot read intervention file for: {intervention_colname}.")
+            df = pd.DataFrame()
+    return df
 
 
 def add_hfca_hs(campaign, hs_df, hfca, seed_index=0):
@@ -115,7 +128,7 @@ def add_hfca_irs(campaign, irs_df, hfca, seed_index=0):
                                                target_age_min=0,
                                                target_age_max=100,
                                                killing_initial_effect=row['initial_kill'],
-                                               killing_decay_time_constant=row['initial_kill'])
+                                               killing_decay_time_constant=row['mean_duration'])  # !! this was 'initial_kill' before, but I think that was an error in the translation from dtktools?
 
     return len(irs_df)
 
@@ -743,7 +756,6 @@ def add_epi_rtss(campaign, rtss_df):
                                   vaccine_decay_time_constant=decay_t,
                                   efficacy_is_multiplicative=False)
         else:
-
             add_triggered_vaccine(campaign,
                                   start_day=start_days[0],
                                   trigger_condition_list=[event_name],
@@ -874,6 +886,262 @@ def add_ds_vaccpmc(campaign, pmc_df, hfca):
     return len(pmc_df)
 
 
+
+
+
+
+
+
+
+#####################
+# ################### vaccine campaigns created with triggered event  ############
+#####################
+
+def get_concentration_at_time(tt, initial_concentration, fast_frac, k1, k2):
+    # calculate the concentration at a specified time
+    concentration_at_tt = initial_concentration * (fast_frac * math.exp(-1 * tt / k1) + (1 - fast_frac) * math.exp(-1 * tt / k2))
+    return concentration_at_tt
+
+
+def get_time_efficacy_values(initial_concentration, max_efficacy, fast_frac, k1, k2, hh, nn, total_time):
+    # get concentration and efficacy through time
+    concentration_through_time = [get_concentration_at_time(tt, initial_concentration, fast_frac, k1, k2) for tt in range(total_time)]
+    # efficacy_through_time = [max_efficacy * (1 - math.exp(mm * cc)) for cc in concentration_through_time]
+    efficacy_through_time = [max_efficacy / (1 + math.pow((hh / cc), nn)) for cc in concentration_through_time]
+    return [[i for i in range(total_time)], efficacy_through_time]
+
+
+def get_vacc_params_from_pkpd_df(row):
+    # extract the parameters describing PKPD from the row of an input file
+    initial_concentration = row['initial_concentration']
+    max_efficacy = row['max_efficacy']
+    fast_frac = row['fast_frac']
+    k1 = row['k1']
+    k2 = row['k2']
+    hh = row['hh']
+    nn = row['nn']
+    total_time = row['total_time']
+    time_efficacy_values = get_time_efficacy_values(initial_concentration, max_efficacy, fast_frac, k1, k2, hh, nn, total_time)
+    return time_efficacy_values
+
+
+def add_triggered_vacc(campaign, vacc_char_df, my_ds=''):
+    # set up vaccines to be distributed when triggered by the 'event_add_new_vaccine' event
+    if my_ds != '':
+        if 'admin_name' in vacc_char_df.columns:
+            vacc_char_df = vacc_char_df[vacc_char_df['admin_name'].str.upper() == my_ds.upper()]
+    if 'vacc_type' in vacc_char_df.columns:
+        row_initial = vacc_char_df[vacc_char_df['vacc_type'] == 'initial'].iloc[0]
+        row_boost = vacc_char_df[vacc_char_df['vacc_type'] == 'booster'].iloc[0]
+    else:
+        row_initial = vacc_char_df.iloc[0]
+        row_boost = vacc_char_df.iloc[0]
+
+    """Set vaccine properties (e.g., initial efficacy, waning)"""
+    # TODO: currently, assumes that boost has same waning type as initial dose. Should probably change this.
+    try:
+        waning_type = row_initial['vacc_waning_type']
+    except:
+        waning_type = 'exponential'
+
+    if waning_type == 'pkpd':
+        time_efficacy_values_initial = get_vacc_params_from_pkpd_df(row_initial)
+        time_efficacy_values_boost = get_vacc_params_from_pkpd_df(row_boost)
+        time_efficacy_initial = time_efficacy_values_initial[1][0]
+        time_efficacy_multipliers = [time_efficacy_values_initial[1][yy] / time_efficacy_initial for yy in
+                                     range(len(time_efficacy_values_initial[1]))]
+        time_efficacy_boost_initial = time_efficacy_values_boost[1][0]
+        time_efficacy_boost_multipliers = [time_efficacy_values_boost[1][yy] / time_efficacy_boost_initial for yy in
+                                     range(len(time_efficacy_values_boost[1]))]
+    else:
+        raise ValueError("Unknown vaccine decay type. Only 'pkpd' currently supported.")
+
+    # vaccine is added in response to broadcast event
+    # initial vaccine
+    add_triggered_vaccine(campaign,
+                          start_day=1,
+                          vaccine_type="AcquisitionBlocking",
+                          trigger_condition_list=['event_add_new_vaccine'],
+                          listening_duration=-1,
+                          demographic_coverage=1,
+                          repetitions=1,
+                          timesteps_between_repetitions=-1,
+                          ind_property_restrictions=[{'VaccineStatus': 'None'}],
+                          vaccine_initial_effect=time_efficacy_initial,
+                          vaccine_linear_times=time_efficacy_values_initial[0],
+                          vaccine_linear_values=time_efficacy_boost_multipliers,
+                          vaccine_expire_at_end=True,
+                          disqualifying_properties=[{"vaccine_selected": "Yes"}],
+                          efficacy_is_multiplicative=True)
+
+
+    # booster vaccines
+    add_triggered_vaccine(campaign,
+                          start_day=1,
+                          vaccine_type="AcquisitionBlocking",
+                          trigger_condition_list=['event_add_new_vaccine'],
+                          listening_duration=-1,
+                          demographic_coverage=1,
+                          repetitions=1,
+                          timesteps_between_repetitions=-1,
+                          ind_property_restrictions=[{'VaccineStatus': 'GotVaccine'}],
+                          vaccine_initial_effect=time_efficacy_boost_initial,
+                          vaccine_linear_times=time_efficacy_values_boost[0],
+                          vaccine_linear_values=time_efficacy_multipliers,
+                          vaccine_expire_at_end=True,
+                          disqualifying_properties=[{"vaccine_selected": "Yes"}],
+                          efficacy_is_multiplicative=True)
+
+
+def change_vacc_ips(campaign):
+    # update VaccineStatus IP to 'Received_Vaccine' if individual receives a vaccine (note: it looks like the add_triggered_vaccine function may now support doing this internally)
+    change_individual_property_triggered(campaign,
+                                         new_ip_key='VaccineStatus',
+                                         new_ip_value='GotVaccine',
+                                         ip_restrictions=[{'VaccineStatus': 'None'}],
+                                         triggers=['Received_Vaccine'],
+                                         blackout=False)
+
+
+def add_pkpd_vacc(campaign, vacc_df, my_ds='', cohort_month_shift=0):
+    # add delivery of vaccine  on a particular day, which works for seasonal distribution and for age-based ONLY in cohort simulations
+
+    # Sequence of vaccine events:
+    #  - on start_day, select people to receive vaccine (change their IP vaccine_selected to True). This will remove old vaccines
+    #  - on start_day+1, create a campaign which changes IP vaccine_selected to False (allowing new vaccines to be given) and broadcasts an event that triggers a node-level intervention where the new vaccine is distributed to these same individuals. The vaccine should have Disqualifying_Properties set to {“vaccine_selected”: “True”}. Also change VaccineStatus IP to ReceivedVaccine.
+    if my_ds != '':
+        if 'admin_name' in vacc_df.columns:
+            vacc_df = vacc_df[vacc_df['admin_name'].str.upper() == my_ds.upper()]
+
+    """Note: for cohort-EPI model, we use campaign-style deployment targeted to specific ages (since births disabled in cohort simulation)"""
+    for r, row in vacc_df.iterrows():
+        # calculate vaccine delivery day, given cohort month shift. If EPI type, don't adjust for cohort month
+        #    (because vaccine is given according to individual's age instead of in a mass campaign)
+        start_day0 = row['simday']
+        if row['deploy_type'] == 'EPI_cohort':
+            start_day = start_day0
+        elif 'season_cohort' in row['deploy_type']:
+            start_day = start_day0 - round(30.4 * cohort_month_shift)
+        elif 'season' in row['deploy_type']:
+            start_day = start_day0
+        else:
+            print('WARNING: vaccine delivery name not recognized, age-based vaccination.')
+            start_day = start_day0
+        if start_day == 0:
+            start_day = 1  # avoid issue with vaccines not being given if set to begin on day 0
+        if start_day > 0:
+            cov_high = row['coverage_high_access']
+            cov_low = row['coverage_low_access']
+            # Select people to receive vaccine (change their IP vaccine_selected to True)
+            """Set group of individuals to receive vaccine and change IPs accordingly"""
+
+            # high-access coverage
+            change_individual_property_scheduled(campaign,
+                                                 start_day=start_day,
+                                                 coverage=cov_high,
+                                                 new_ip_key='vaccine_selected',
+                                                 new_ip_value='Yes',
+                                                 target_age_min=row['agemin'],
+                                                 target_age_max=row['agemax'],
+                                                 ip_restrictions=[{'SMCAccess': 'High'}])
+
+            # low-access coverage
+            change_individual_property_scheduled(campaign,
+                                                 start_day=start_day,
+                                                 coverage=cov_low,
+                                                 new_ip_key='vaccine_selected',
+                                                 new_ip_value='Yes',
+                                                 target_age_min=row['agemin'],
+                                                 target_age_max=row['agemax'],
+                                                 ip_restrictions=[{'SMCAccess': 'Low'}])
+
+            # On start_day+1, create a campaign which changes IP vaccine_selected to No (allowing new vaccines to be given) and broadcasts an event that triggers a node-level intervention where the new vaccine is distributed to these same individuals. The vaccine should have Disqualifying_Properties set to {“vaccine_selected”: “Yes”}. Also change VaccineStatus IP to ReceivedVaccine.
+            broadcast = BroadcastEvent(campaign, "event_add_new_vaccine")
+            change = PropertyValueChanger(campaign, Target_Property_Key="vaccine_selected", Target_Property_Value="No")
+            add_campaign_event(campaign=campaign,
+                               start_day=start_day+1,
+                               demographic_coverage=1,
+                               node_ids=None,  # all nodes will get intervention
+                               repetitions=1,
+                               timesteps_between_repetitions=-1,
+                               ind_property_restrictions=[{'vaccine_selected': 'Yes'}],
+                               individual_intervention=[change, broadcast])
+
+    change_vacc_ips(campaign)
+    return len(vacc_df)
+
+
+def add_pkpd_epi_vacc(campaign, epi_vacc_df, hfca):
+    # add delivery of vaccine a particular number of days after birth, which works for age-based distribution in simulations with vital dynamics
+
+    # Sequence of vaccine events:
+    #  - When someone is born, it begins a countdown until the specified touchpoint(s), when an 'epi_touchpoint' event is broadcast (each will have a unique event name).
+    #  - Any time an individual has an 'epi_touchpoint' event, it causes them to be eligible for an IP change to 'vaccine_selected:Yes' (whether or not this occurs depends on their access group and the coverage associated with that access group)
+    #  - Also have a daily campaign with 100% coverage that applies only to individuals with vaccine_selected:Yes. It should broadcast the 'event_add_new_vaccine' event and change the 'vaccine_selected' IP to 'No'
+    #  - The 'event_add_new_vaccine' will trigger a node-level intervention, created in add_triggered_vacc(), where the new vaccine is distributed to these individuals. The vaccine should have Disqualifying_Properties set to {“vaccine_selected”: “True”} so that old vaccines are removed when new ones are given. It also changes VaccineStatus IP to ReceivedVaccine.
+
+    if hfca != '':
+        if 'admin_name' in epi_vacc_df.columns:
+            epi_vacc_df = epi_vacc_df[epi_vacc_df['admin_name'].str.upper() == hfca.upper()]
+    if len(epi_vacc_df) == 0:
+        return 0
+
+    # iterate through touchpoints in dataframe, since each one may have a different coverage
+    for r, row in epi_vacc_df.iterrows():
+        cur_touchpoint = row['epi_touchpoint']
+        cur_touchpoint_event = f'epi_touchpoint{cur_touchpoint}'
+        cov_high = row['coverage_high_access']
+        cov_low = row['coverage_low_access']
+        start_epi = row['simday']  # EPI vaccines are only given after this day of the simulation
+
+        # have a campaign to broadcast the current EPI touchpoint event
+        broadcast_event = BroadcastEvent(campaign, cur_touchpoint_event)
+        add_triggered_campaign_delay_event(campaign, start_day=0,
+                                           trigger_condition_list=['Births'],
+                                           delay_period_constant=cur_touchpoint,
+                                           demographic_coverage=1,
+                                           individual_intervention=broadcast_event)
+
+        # Select people to receive vaccine on this EPI touchpoint day (change their IP vaccine_selected to Yes), with coverage depending on access group
+        # high-access coverage
+        change_individual_property_triggered(campaign,
+                                             start_day=start_epi,
+                                             coverage=cov_high,
+                                             new_ip_key='vaccine_selected',
+                                             new_ip_value='Yes',
+                                             ip_restrictions=[{'SMCAccess': 'High'}],
+                                             triggers=[cur_touchpoint_event],
+                                             blackout=False)
+        # low-access coverage
+        change_individual_property_triggered(campaign,
+                                             start_day=start_epi,
+                                             coverage=cov_low,
+                                             new_ip_key='vaccine_selected',
+                                             new_ip_value='Yes',
+                                             ip_restrictions=[{'SMCAccess': 'Low'}],
+                                             triggers=[cur_touchpoint_event],
+                                             blackout=False)
+
+    # Whenever an individual has the 'vaccine_selected:Yes' IP, change the IP vaccine_selected to No (allowing new vaccines to be given) and broadcast an event that triggers a node-level intervention where the new vaccine is distributed to these same individuals. The vaccine should have Disqualifying_Properties set to {“vaccine_selected”: “Yes”}. Also change VaccineStatus IP to ReceivedVaccine.
+    broadcast = BroadcastEvent(campaign, "event_add_new_vaccine")
+    change = PropertyValueChanger(campaign, Target_Property_Key="vaccine_selected", Target_Property_Value="No")
+    add_campaign_event(campaign=campaign,
+                       start_day=0,
+                       demographic_coverage=1,
+                       repetitions=-1,
+                       timesteps_between_repetitions=1,
+                       ind_property_restrictions=[{'vaccine_selected': 'Yes'}],
+                       individual_intervention=[change, broadcast])
+
+    change_vacc_ips(campaign)
+    return len(epi_vacc_df)
+
+
+#####################
+# ################### main function to coordinate adding all interventions  ############
+#####################
+
+
 def add_all_interventions(campaign, hfca, seed_index=1, hs_df=pd.DataFrame(), nmf_df=pd.DataFrame(),
                           itn_df=pd.DataFrame(),
                           itn_anc_df=pd.DataFrame(), itn_use_seasonality=pd.DataFrame(),
@@ -881,6 +1149,7 @@ def add_all_interventions(campaign, hfca, seed_index=1, hs_df=pd.DataFrame(), nm
                           itn_anc_adult_birthday_years=None, itn_epi_df=pd.DataFrame(),
                           itn_chw_df=pd.DataFrame(), itn_chw_annual_df=pd.DataFrame(),
                           irs_df=pd.DataFrame(), smc_df=pd.DataFrame(), pmc_df=pd.DataFrame(), vacc_df=pd.DataFrame(),
+                          vacc_char_df=pd.DataFrame(), vacc_df_2=pd.DataFrame(), epi_vacc_df=pd.DataFrame(), use_same_access_ips_all_ages=False,
                           sp_resist_day1_multiply=1, adherence_multiplier=1, use_smc_vaccine_proxy=False):
     event_list = []
 
@@ -889,7 +1158,7 @@ def add_all_interventions(campaign, hfca, seed_index=1, hs_df=pd.DataFrame(), nm
         if has_irs > 0:
             event_list.append('Received_IRS')
     if not smc_df.empty:
-        has_smc = update_smc_access_ips(campaign, smc_df=smc_df, hfca=hfca)
+        has_smc = update_smc_access_ips(campaign, smc_df=smc_df, hfca=hfca, use_same_access_ips_all_ages=use_same_access_ips_all_ages)
         if use_smc_vaccine_proxy:
             has_smc = add_hfca_vaccsmc(campaign, smc_df, hfca,
                                        effective_coverage_resistance_multiplier=sp_resist_day1_multiply,
@@ -908,6 +1177,18 @@ def add_all_interventions(campaign, hfca, seed_index=1, hs_df=pd.DataFrame(), nm
         has_vacc = add_ds_rtss(campaign, rtss_df=vacc_df, hfca=hfca)
         if has_vacc > 0:
             event_list = event_list + ['Received_Vaccine']
+    if not vacc_df_2.empty:
+        has_pkpd_vacc = update_smc_access_ips(campaign, smc_df=vacc_df_2, hfca=hfca, use_same_access_ips_all_ages=use_same_access_ips_all_ages)
+        add_triggered_vacc(campaign, vacc_char_df, hfca)
+        has_vacc = add_pkpd_vacc(campaign, vacc_df_2, hfca)
+        if has_vacc > 0:
+            event_list = event_list + ['Received_Vaccine']
+            event_list = event_list + ['event_add_new_vaccine']
+    if not epi_vacc_df.empty:
+        has_pkpd_vacc = update_smc_access_ips(campaign, smc_df=epi_vacc_df, hfca=hfca,
+                                              use_same_access_ips_all_ages=use_same_access_ips_all_ages)
+        add_triggered_vacc(campaign, vacc_char_df, hfca)
+        has_vacc = add_pkpd_epi_vacc(campaign, epi_vacc_df, hfca)
     if not (itn_df.empty and itn_anc_df.empty and itn_epi_df.empty and itn_chw_df.empty and itn_chw_annual_df.empty):
         has_itn = add_hfca_itns(campaign=campaign, itn_df=itn_df, itn_anc_df=itn_anc_df,
                                 itn_anc_adult_birthday_years=itn_anc_adult_birthday_years, itn_epi_df=itn_epi_df,
@@ -929,3 +1210,5 @@ def add_all_interventions(campaign, hfca, seed_index=1, hs_df=pd.DataFrame(), nm
         event_list.append('Received_NMF_Treatment')
 
     return {"events": event_list}
+
+
